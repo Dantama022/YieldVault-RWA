@@ -8,10 +8,18 @@ on:
   schedule:
     - cron: '0 4 * * *' # Daily at 4:00 AM UTC
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   pnpm-audit:
     name: Workspace PNPM Audit (Gating on High/Critical)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -41,6 +49,7 @@ jobs:
   npm-audit:
     name: NPM Audit (Frontend & Backend)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -61,6 +70,7 @@ jobs:
   cargo-audit:
     name: Cargo Security Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -69,14 +79,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        uses: taiki-e/install-action@cargo-audit
 
       - name: Run Cargo Audit
-        run: cargo audit --deny warnings || echo "Cargo audit completed."
+        run: cargo audit --deny warnings
 
   dependency-review:
     name: GitHub Dependency Review
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: github.event_name == 'pull_request'
     steps:
       - name: Checkout Repository
@@ -86,3 +97,36 @@ jobs:
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
+
+  npm-license-check:
+    name: NPM License Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Enable Corepack & Setup pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.12.0 --activate
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install license-checker
+        run: npm install -g license-checker-rseidelsohn
+
+      - name: Check Frontend Licenses
+        working-directory: ./frontend
+        run: |
+          license-checker --onlyAllow "MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;0BSD;CC0-1.0;Unlicense;Python-2.0;CC-BY-3.0;CC-BY-4.0" --summary
+
+      - name: Check Backend Licenses
+        working-directory: ./backend
+        run: |
+          license-checker --onlyAllow "MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;0BSD;CC0-1.0;Unlicense;Python-2.0;CC-BY-3.0;CC-BY-4.0" --summary
