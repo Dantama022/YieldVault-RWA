@@ -179,13 +179,58 @@ export function maskWalletAddress(addr: string): string {
   return addr;
 }
 
-// ─── Client IP Resolution ────────────────────────────────────────────────────
+// ─── Client IP Resolution & Trust Proxy Configuration ─────────────────────────
 
 const trustProxyWarnedApps = new WeakSet<object>();
 
 /**
+ * Parses and validates the TRUST_PROXY environment variable into a non-negative integer hop count.
+ *
+ * Rules:
+ * - Defaults to `0` when absent or undefined (safe default: only direct socket connection is trusted).
+ * - Accepts non-negative integers (e.g. 0, 1, 2).
+ * - Rejects invalid, negative, fractional, and non-numeric strings with a descriptive configuration error.
+ * - Never enables unrestricted proxy trust (`true`).
+ *
+ * Deployment guidelines:
+ * - Direct connection / no reverse proxy: set `TRUST_PROXY=0` (or leave unset).
+ * - Behind a single reverse proxy or load balancer (e.g., AWS ALB, Nginx, GCP HTTPS LB): set `TRUST_PROXY=1`.
+ * - Behind two hops (e.g., Cloudflare CDN in front of an AWS ALB): set `TRUST_PROXY=2`.
+ */
+export function parseTrustProxyConfig(raw: string | undefined = process.env.TRUST_PROXY): number {
+  if (raw === undefined || raw === '') {
+    return 0;
+  }
+
+  const trimmed = raw.trim();
+  if (trimmed === '') {
+    throw new Error(
+      'Invalid TRUST_PROXY configuration: value cannot be whitespace-only. ' +
+      'TRUST_PROXY must be a non-negative integer hop count (e.g., "0" for direct access, "1" for a single load balancer).'
+    );
+  }
+
+  // Reject negative, fractional, or non-numeric values
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(
+      `Invalid TRUST_PROXY value "${raw}". TRUST_PROXY must be a non-negative integer hop count (e.g. 0, 1, 2). ` +
+      'Choose the number of trusted reverse proxies between the client and Express (e.g. 1 for an AWS ALB).'
+    );
+  }
+
+  const hopCount = Number(trimmed);
+  if (!Number.isSafeInteger(hopCount) || hopCount < 0) {
+    throw new Error(
+      `Invalid TRUST_PROXY value "${raw}". Hop count must be a non-negative integer.`
+    );
+  }
+
+  return hopCount;
+}
+
+/**
  * Resolves the client IP for rate limiting.
- * When Express `trust proxy` is enabled, `req.ip` is derived from the
+ * When Express `trust proxy` is configured, `req.ip` is derived from the
  * X-Forwarded-For chain according to that setting. Otherwise the header is
  * unverified and attacker-controlled, so the socket's remote address is used
  * to prevent bucket rotation via spoofed X-Forwarded-For values.
@@ -206,7 +251,7 @@ export function resolveClientIp(req: Request): string {
     );
   }
 
-  if (trustProxy) {
+  if (trustProxy !== undefined) {
     return req.ip || req.socket?.remoteAddress || 'unknown';
   }
   return req.socket?.remoteAddress || req.ip || 'unknown';

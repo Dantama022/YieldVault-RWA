@@ -10,12 +10,33 @@ import { sendApiError } from './apiError';
  * Supports an explicit allowlist of origins via environment variables.
  */
 
-const getCORSOrigins = (): (string | RegExp)[] => {
-  const envOrigins = process.env.CORS_ALLOWED_ORIGINS;
+/**
+ * Validates CORS configuration for the current environment.
+ *
+ * In production (`NODE_ENV === 'production'`), `CORS_ALLOWED_ORIGINS` is strictly required.
+ * It must not be unset, empty, or whitespace-only. If it is invalid or missing, an Error
+ * is thrown with clear remediation instructions so the application fails fast before listening.
+ */
+export function validateCorsConfig(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.NODE_ENV === 'production') {
+    const origins = env.CORS_ALLOWED_ORIGINS;
+    if (!origins || origins.trim().length === 0) {
+      throw new Error(
+        'Missing required environment variable: CORS_ALLOWED_ORIGINS is not set or is empty in production. ' +
+        'Please set CORS_ALLOWED_ORIGINS to a comma-separated list of trusted origins (e.g., ' +
+        'CORS_ALLOWED_ORIGINS="https://app.yieldvault.finance,https://www.yieldvault.finance") in your environment.'
+      );
+    }
+  }
+}
+
+export const getCORSOrigins = (env: NodeJS.ProcessEnv = process.env): (string | RegExp)[] => {
+  validateCorsConfig(env);
+  const envOrigins = env.CORS_ALLOWED_ORIGINS;
   
-  if (!envOrigins) {
+  if (!envOrigins || envOrigins.trim().length === 0) {
     // In development, allow localhost by default if no origins are specified
-    if (process.env.NODE_ENV !== 'production') {
+    if (env.NODE_ENV !== 'production') {
       return [/http:\/\/localhost:\d+/];
     }
     return [];

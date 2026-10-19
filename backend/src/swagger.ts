@@ -598,12 +598,37 @@ const options: swaggerJsdoc.Options = {
 export const specs = swaggerJsdoc(options);
 
 /**
- * Mounts Swagger UI at `/docs` (unless explicitly disabled via
- * `DISABLE_SWAGGER=true`). The spec is also available as raw JSON at
- * `/docs/openapi.json` for CI verification and third-party tooling.
+ * Centralized decision helper for Swagger UI and `/docs/openapi.json` endpoints.
+ *
+ * Rules:
+ * 1. `DISABLE_SWAGGER=true` always disables Swagger in all environments, even if `SWAGGER_ENABLED=true`.
+ * 2. In production (`NODE_ENV=production`), Swagger is disabled by default. It is only enabled
+ *    if `SWAGGER_ENABLED=true` is explicitly set.
+ * 3. Non-production behavior remains unchanged: Swagger is enabled by default unless `DISABLE_SWAGGER=true`.
+ * 4. Missing or invalid `SWAGGER_ENABLED` values never implicitly enable production Swagger.
+ */
+export function isSwaggerEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.DISABLE_SWAGGER === 'true') {
+    return false;
+  }
+
+  const isProduction = env.NODE_ENV === 'production';
+  if (isProduction) {
+    return env.SWAGGER_ENABLED === 'true';
+  }
+
+  return true;
+}
+
+/**
+ * Mounts Swagger UI at `/docs` and the spec at `/docs/openapi.json`
+ * according to the centralized `isSwaggerEnabled` policy.
+ *
+ * In production, Swagger is disabled by default unless explicitly enabled via `SWAGGER_ENABLED=true`.
+ * `DISABLE_SWAGGER=true` disables Swagger across all environments.
  */
 export function setupSwagger(app: Express): void {
-  if (process.env.DISABLE_SWAGGER === 'true') {
+  if (!isSwaggerEnabled()) {
     return;
   }
 
@@ -623,3 +648,4 @@ export function setupSwagger(app: Express): void {
     }),
   );
 }
+

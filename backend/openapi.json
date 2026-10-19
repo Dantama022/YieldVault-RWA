@@ -437,95 +437,6 @@
     }
   ],
   "paths": {
-    "/api/v1/vaults": {
-      "get": {
-        "tags": [
-          "Vault"
-        ],
-        "summary": "List vaults",
-        "description": "Paginated listing of active (non-deleted) vaults. `limit` is capped at 50 and `page` at 1000; exceeding `limit` fails fast with `400` / `LIMIT_EXCEEDED` instead of silently clamping, so a client that asks for an oversized page is never handed a response that looks complete. Rate limited: global 100 req / 15 min per IP; authenticated APIs 30 req / min per key. `429` responses follow the standard error envelope with a `retryAfter` detail.",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/pageSize"
-          },
-          {
-            "$ref": "#/components/parameters/pageNumber"
-          },
-          {
-            "$ref": "#/components/parameters/correlationId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "One page of vaults",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/VaultListResponse"
-                },
-                "example": {
-                  "data": [
-                    {
-                      "id": "0f1b3a2c-6d4e-4a1b-9f0e-2c5d7e8b9a01",
-                      "aum": 1250000,
-                      "tvlUsd": "1250000.00",
-                      "createdAt": "2026-01-01T00:00:00.000Z",
-                      "updatedAt": "2026-01-02T00:00:00.000Z"
-                    }
-                  ],
-                  "pagination": {
-                    "count": 1,
-                    "limit": 20,
-                    "total": 1,
-                    "nextCursor": null,
-                    "prevCursor": null,
-                    "currentPage": 1,
-                    "totalPages": 1,
-                    "hasNextPage": false,
-                    "hasPrevPage": false
-                  },
-                  "timestamp": "2026-01-01T00:00:00.000Z"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "`limit` above the published ceiling",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                },
-                "example": {
-                  "error": "Bad Request",
-                  "status": 400,
-                  "code": "LIMIT_EXCEEDED",
-                  "message": "limit must not exceed 50 (received 100000).",
-                  "retryable": false,
-                  "details": {
-                    "field": "limit",
-                    "requested": 100000,
-                    "maxLimit": 50,
-                    "defaultLimit": 20,
-                    "maxPage": 1000
-                  }
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Rate limited",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/health": {
       "get": {
         "tags": [
@@ -747,6 +658,95 @@
                       "format": "date-time"
                     }
                   }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vaults": {
+      "get": {
+        "tags": [
+          "Vault"
+        ],
+        "summary": "List vaults",
+        "description": "Paginated listing of active (non-deleted) vaults. `limit` is capped at 50 and `page` at 1000; exceeding `limit` fails fast with `400` / `LIMIT_EXCEEDED` instead of silently clamping, so a client that asks for an oversized page is never handed a response that looks complete. Rate limited: global 100 req / 15 min per IP; authenticated APIs 30 req / min per key. `429` responses follow the standard error envelope with a `retryAfter` detail.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/pageSize"
+          },
+          {
+            "$ref": "#/components/parameters/pageNumber"
+          },
+          {
+            "$ref": "#/components/parameters/correlationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of vaults",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultListResponse"
+                },
+                "example": {
+                  "data": [
+                    {
+                      "id": "0f1b3a2c-6d4e-4a1b-9f0e-2c5d7e8b9a01",
+                      "aum": 1250000,
+                      "tvlUsd": "1250000.00",
+                      "createdAt": "2026-01-01T00:00:00.000Z",
+                      "updatedAt": "2026-01-02T00:00:00.000Z"
+                    }
+                  ],
+                  "pagination": {
+                    "count": 1,
+                    "limit": 20,
+                    "total": 1,
+                    "nextCursor": null,
+                    "prevCursor": null,
+                    "currentPage": 1,
+                    "totalPages": 1,
+                    "hasNextPage": false,
+                    "hasPrevPage": false
+                  },
+                  "timestamp": "2026-01-01T00:00:00.000Z"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`limit` above the published ceiling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "example": {
+                  "error": "Bad Request",
+                  "status": 400,
+                  "code": "LIMIT_EXCEEDED",
+                  "message": "limit must not exceed 50 (received 100000).",
+                  "retryable": false,
+                  "details": {
+                    "field": "limit",
+                    "requested": 100000,
+                    "maxLimit": 50,
+                    "defaultLimit": 20,
+                    "maxPage": 1000
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -1166,6 +1166,42 @@
         }
       }
     },
+    "/admin/transfers/in-doubt": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /admin/transfers/in-doubt",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/transfers/{key}/resolve": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /admin/transfers/{key}/resolve",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
     "/admin/rate-limits": {
       "get": {
         "tags": [
@@ -1391,19 +1427,6 @@
         }
       }
     },
-    "/api/v1/vault/transactions/export": {
-      "get": {
-        "tags": [
-          "api"
-        ],
-        "summary": "GET /api/v1/vault/transactions/export",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
     "/api/v1/portfolio/holdings": {
       "get": {
         "tags": [
@@ -1545,19 +1568,6 @@
         }
       }
     },
-    "/api/vault/transactions/export": {
-      "get": {
-        "tags": [
-          "api"
-        ],
-        "summary": "GET /api/vault/transactions/export",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
     "/api/vaults": {
       "get": {
         "tags": [
@@ -1649,19 +1659,6 @@
         }
       }
     },
-    "/webhooks/verify": {
-      "post": {
-        "tags": [
-          "webhooks"
-        ],
-        "summary": "POST /webhooks/verify",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
     "/api/v1/vaults/{id}/health": {
       "get": {
         "tags": [
@@ -1727,6 +1724,509 @@
           "api"
         ],
         "summary": "GET /api/v1/vault/apy",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/vault/transactions/export": {
+      "get": {
+        "tags": [
+          "api"
+        ],
+        "summary": "GET /api/vault/transactions/export",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/vault/transactions/export": {
+      "get": {
+        "tags": [
+          "api"
+        ],
+        "summary": "GET /api/v1/vault/transactions/export",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/transactions/backfill": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /admin/transactions/backfill",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /admin/transactions/backfill",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/transactions/backfill/{jobId}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /admin/transactions/backfill/{jobId}",
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/webhooks/verify": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "POST /webhooks/verify",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/webhooks/{id}/verify": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /admin/webhooks/{id}/verify",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/webhooks/{id}": {
+      "patch": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "PATCH /admin/webhooks/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "DELETE /admin/webhooks/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/webhooks/{id}/restore": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /admin/webhooks/{id}/restore",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/webhooks/dead-letter": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /admin/webhooks/dead-letter",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/webhooks/dead-letter/{id}/retry": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /admin/webhooks/dead-letter/{id}/retry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/webhooks/deliveries": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /admin/webhooks/deliveries",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/verify": {
+      "post": {
+        "tags": [
+          "api"
+        ],
+        "summary": "POST /api/v1/webhooks/verify",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/webhooks/deduplication/metrics": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /admin/webhooks/deduplication/metrics",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/webhooks/deduplication/entries": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /admin/webhooks/deduplication/entries",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/webhooks/deduplication/{eventId}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "DELETE /admin/webhooks/deduplication/{eventId}",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/webhooks/deduplication": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "DELETE /admin/webhooks/deduplication",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/exports/jobs": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /admin/exports/jobs",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/exports/jobs/{id}/verify": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /admin/exports/jobs/{id}/verify",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/exports/bulk": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /admin/exports/bulk",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/exports/bulk/jobs": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /admin/exports/bulk/jobs",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/exports/bulk/jobs/{id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /admin/exports/bulk/jobs/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/exports/bulk/jobs/{id}/cancel": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /admin/exports/bulk/jobs/{id}/cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/exports/bulk/artifacts/{artifactId}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /admin/exports/bulk/artifacts/{artifactId}",
+        "parameters": [
+          {
+            "name": "artifactId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/reports/exports": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /admin/reports/exports",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/reports/exports/manifests": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /admin/reports/exports/manifests",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/reports/exports/manifests/{id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /admin/reports/exports/manifests/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/admin/reports/exports/manifests/{id}/verify": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /admin/reports/exports/manifests/{id}/verify",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful response"
@@ -2248,295 +2748,12 @@
         }
       }
     },
-    "/admin/webhooks/{id}/verify": {
-      "post": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "POST /admin/webhooks/{id}/verify",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/webhooks/{id}": {
-      "patch": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "PATCH /admin/webhooks/{id}",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "DELETE /admin/webhooks/{id}",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/webhooks/{id}/restore": {
-      "post": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "POST /admin/webhooks/{id}/restore",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/webhooks/dead-letter": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "GET /admin/webhooks/dead-letter",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/webhooks/dead-letter/{id}/retry": {
-      "post": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "POST /admin/webhooks/dead-letter/{id}/retry",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/webhooks/deliveries": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "GET /admin/webhooks/deliveries",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/api/v1/webhooks/verify": {
-      "post": {
-        "tags": [
-          "api"
-        ],
-        "summary": "POST /api/v1/webhooks/verify",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
     "/admin/audit/logs": {
       "get": {
         "tags": [
           "admin"
         ],
         "summary": "GET /admin/audit/logs",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/exports/jobs": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "GET /admin/exports/jobs",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/exports/jobs/{id}/verify": {
-      "post": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "POST /admin/exports/jobs/{id}/verify",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/exports/bulk": {
-      "post": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "POST /admin/exports/bulk",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/exports/bulk/jobs": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "GET /admin/exports/bulk/jobs",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/exports/bulk/jobs/{id}": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "GET /admin/exports/bulk/jobs/{id}",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/exports/bulk/jobs/{id}/cancel": {
-      "post": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "POST /admin/exports/bulk/jobs/{id}/cancel",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/exports/bulk/artifacts/{artifactId}": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "GET /admin/exports/bulk/artifacts/{artifactId}",
-        "parameters": [
-          {
-            "name": "artifactId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful response"
@@ -2583,53 +2800,6 @@
         }
       }
     },
-    "/admin/transactions/backfill": {
-      "post": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "POST /admin/transactions/backfill",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      },
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "GET /admin/transactions/backfill",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/transactions/backfill/{jobId}": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "GET /admin/transactions/backfill/{jobId}",
-        "parameters": [
-          {
-            "name": "jobId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
     "/admin/governance/snapshots": {
       "get": {
         "tags": [
@@ -2649,78 +2819,6 @@
           "admin"
         ],
         "summary": "POST /admin/governance/snapshots/export",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/reports/exports": {
-      "post": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "POST /admin/reports/exports",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/reports/exports/manifests": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "GET /admin/reports/exports/manifests",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/reports/exports/manifests/{id}": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "GET /admin/reports/exports/manifests/{id}",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/reports/exports/manifests/{id}/verify": {
-      "post": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "POST /admin/reports/exports/manifests/{id}/verify",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful response"
@@ -2969,87 +3067,12 @@
         }
       }
     },
-    "/admin/webhooks/deduplication/metrics": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "GET /admin/webhooks/deduplication/metrics",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/webhooks/deduplication/entries": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "GET /admin/webhooks/deduplication/entries",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/webhooks/deduplication/{eventId}": {
-      "delete": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "DELETE /admin/webhooks/deduplication/{eventId}",
-        "parameters": [
-          {
-            "name": "eventId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/admin/webhooks/deduplication": {
-      "delete": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "DELETE /admin/webhooks/deduplication",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
     "/admin/analytics/wallet-activity/heatmap": {
       "get": {
         "tags": [
           "admin"
         ],
         "summary": "GET /admin/analytics/wallet-activity/heatmap",
-        "responses": {
-          "200": {
-            "description": "Successful response"
-          }
-        }
-      }
-    },
-    "/health/probes": {
-      "get": {
-        "tags": [
-          "health"
-        ],
-        "summary": "GET /health/probes",
         "responses": {
           "200": {
             "description": "Successful response"
@@ -3362,6 +3385,19 @@
           "admin"
         ],
         "summary": "POST /admin/vaults",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/health/probes": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "GET /health/probes",
         "responses": {
           "200": {
             "description": "Successful response"

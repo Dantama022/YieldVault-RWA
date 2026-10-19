@@ -8,7 +8,7 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import { PrismaClient as PrismaClientRuntime } from '.prisma/client';
+const PrismaClientRuntime = PrismaClient;
 import { assertCriticalEntityMutationAllowed } from './criticalEntityPolicy';
 import { logger } from './middleware/structuredLogging';
 import { recordQueryPerformance } from './queryBudgets';

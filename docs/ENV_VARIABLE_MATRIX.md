@@ -22,6 +22,9 @@ Complete reference for all environment variables across the YieldVault RWA stack
 | `NODE_ENV` | `development` | ✅ always | Runtime environment (`development`, `production`, `test`) | `backend/src/index.ts`, `auth.ts`, `database.ts`, `prismaClient.ts`, `tracing.ts`, `rateLimiter.ts`, `cors.ts`, `geofencing.ts`, `allowlist.ts`, `maintenanceMode.ts`, `walletSignature.ts` (30+ files) |
 | `LOG_LEVEL` | `debug` (dev) / `info` (prod) | ⬜ optional | Structured logger level (`debug`, `info`, `warn`, `error`) | `backend/src/index.ts` |
 | `DRAIN_TIMEOUT_MS` | `30000` | ⬜ optional | Graceful shutdown drain timeout in ms | `backend/src/index.ts`, `gracefulShutdown.ts` |
+| `TRUST_PROXY` | `0` | ⬜ optional | Trusted reverse proxy hop count (0 direct, 1 single LB/ALB, 2 Cloudflare+ALB); configures Express `trust proxy` safely | `backend/src/rateLimiter.ts`, `backend/src/index.ts` |
+| `SWAGGER_ENABLED` | `false` (prod) | ⬜ optional | Explicitly enable Swagger UI and `/docs/openapi.json` in production (`true`) | `backend/src/swagger.ts` |
+| `DISABLE_SWAGGER` | `false` | ⬜ optional | Force disable Swagger UI and `/docs/openapi.json` in all environments (`true`) | `backend/src/swagger.ts` |
 | `CACHE_TTL_MS` | `60000` | ⬜ optional | Response cache TTL (vault summary, metrics, APY) | `backend/src/index.ts` |
 | `CACHE_VAULT_METRICS_TTL_MS` | `60000` | ⬜ optional | Alias for `CACHE_TTL_MS` | `backend/src/index.ts` |
 | `METRICS_POLL_INTERVAL_MS` | `60000` | ⬜ optional | Prometheus gauge sync interval | `backend/src/index.ts` |
@@ -156,7 +159,7 @@ Complete reference for all environment variables across the YieldVault RWA stack
 
 | Variable | Default | Req. | Description | Source |
 |---|---|---|---|---|
-| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,https://app.yieldvault.finance` | ✅ always | Comma-separated allowed CORS origins | `backend/src/middleware/cors.ts` |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,https://app.yieldvault.finance` | 🔶 prod | Comma-separated allowed CORS origins. In production (`NODE_ENV=production`), required and must not be empty or whitespace-only; server fails fast at startup if unset. | `backend/src/middleware/cors.ts`, `backend/src/index.ts` |
 
 ---
 

@@ -4,12 +4,23 @@
 //! residual dust with the vault, so `deposit -> withdraw` round trips can never
 //! mint value out of nothing.
 //!
-//! | Operation  | Direction | Rounding |
-//! |------------|-----------|----------|
-//! | `deposit`  | assets to shares | [`Rounding::Down`] |
-//! | `mint`     | shares to assets | [`Rounding::Up`]   |
-//! | `withdraw` | assets to shares | [`Rounding::Up`]   |
-//! | `redeem`   | shares to assets | [`Rounding::Down`] |
+//! ### Conversion Operations & Rounding Directions
+//!
+//! The table below defines the canonical ERC-4626 rounding policy implemented by this module:
+//!
+//! | Operation  | Direction        | Rounding           | Vault Public Entrypoint / Application Context |
+//! |------------|------------------|--------------------|-----------------------------------------------|
+//! | `deposit`  | assets to shares | [`Rounding::Down`] | `vault::deposit(user, amount)` (mints shares) |
+//! | `redeem`   | shares to assets | [`Rounding::Down`] | `vault::withdraw(user, shares)` (burns shares)|
+//! | `mint`     | shares to assets | [`Rounding::Up`]   | Required asset quote for exact shares         |
+//! | `withdraw` | assets to shares | [`Rounding::Up`]   | Required share quote for exact assets (ERC-4626)|
+//!
+//! **Important note on vault `withdraw` semantics**:
+//! In ERC-4626 standard terminology, `withdraw` refers to asset-denominated withdrawals
+//! (specifying assets out, burning shares rounded up). However, in this vault contract,
+//! the public entrypoint is `withdraw(user, shares)` which takes **shares as input** and converts
+//! them to assets using round-down ([`Rounding::Down`]), matching the `redeem` operation.
+//! The vault does not currently provide an asset-denominated withdrawal entrypoint.
 //!
 //! [`FIXTURES`] is the canonical cross-language conformance table. The same
 //! vectors are published as `fixtures/rounding_fixtures.json` so that the
@@ -318,5 +329,68 @@ mod tests {
         assert_eq!(Op::Redeem.rounding(), Rounding::Down);
         assert_eq!(Op::Mint.rounding(), Rounding::Up);
         assert_eq!(Op::Withdraw.rounding(), Rounding::Up);
+    }
+
+    #[test]
+    fn test_rounding_up_calculation_branch_and_boundaries() {
+        // Issue #1679: Exercise Rounding::Up calculation branch.
+        // 1. Non-exact conversion ratio proving round-up produces a different result from round-down:
+        // Case A: mul_div directly
+        // 100 * 1000 / 1500 = 66 remainder 1000
+        let down_res = mul_div(100, 1000, 1500, Rounding::Down).unwrap();
+        let up_res = mul_div(100, 1000, 1500, Rounding::Up).unwrap();
+        assert_eq!(down_res, 66);
+        assert_eq!(up_res, 67);
+        assert_ne!(
+            up_res, down_res,
+            "Round-up must produce a strictly greater result than round-down when a remainder exists"
+        );
+
+        // Case B: assets_to_shares_rounded (Op::Deposit vs Op::Withdraw)
+        let deposit_shares = assets_to_shares_rounded(100, 1000, 1500, Op::Deposit).unwrap();
+        let withdraw_shares = assets_to_shares_rounded(100, 1000, 1500, Op::Withdraw).unwrap();
+        assert_eq!(deposit_shares, 66);
+        assert_eq!(withdraw_shares, 67);
+        assert_ne!(withdraw_shares, deposit_shares);
+
+        // Case C: shares_to_assets_rounded (Op::Redeem vs Op::Mint)
+        // 99 * 1500 / 1000 = 148,500 / 1000 = 148 remainder 500
+        let redeem_assets = shares_to_assets_rounded(99, 1000, 1500, Op::Redeem).unwrap();
+        let mint_assets = shares_to_assets_rounded(99, 1000, 1500, Op::Mint).unwrap();
+        assert_eq!(redeem_assets, 148);
+        assert_eq!(mint_assets, 149);
+        assert_ne!(mint_assets, redeem_assets);
+
+        // 2. Exact-divisibility behavior as a boundary case:
+        // When product % denom == 0, Rounding::Up must NOT bump (up_res == down_res).
+        let exact_down = mul_div(300, 1000, 1500, Rounding::Down).unwrap();
+        let exact_up = mul_div(300, 1000, 1500, Rounding::Up).unwrap();
+        assert_eq!(exact_down, 200);
+        assert_eq!(exact_up, 200);
+
+        let exact_withdraw = assets_to_shares_rounded(300, 1000, 1500, Op::Withdraw).unwrap();
+        let exact_deposit = assets_to_shares_rounded(300, 1000, 1500, Op::Deposit).unwrap();
+        assert_eq!(exact_withdraw, 200);
+        assert_eq!(exact_deposit, 200);
+
+        // Zero amount boundary case:
+        assert_eq!(mul_div(0, 1000, 1500, Rounding::Up), Ok(0));
+        assert_eq!(mul_div(0, 1000, 1500, Rounding::Down), Ok(0));
+
+        // Single unit dust (remainder only, quotient 0):
+        // 1 * 1000 / 1500 = quotient 0, remainder 1000 -> Down: 0, Up: 1
+        assert_eq!(mul_div(1, 1000, 1500, Rounding::Down), Ok(0));
+        assert_eq!(mul_div(1, 1000, 1500, Rounding::Up), Ok(1));
+
+        // 3. Supported input domain / large values without overflow:
+        let large_a = 1_000_000_000_000i128;
+        let large_b = 2_000_000_000_000i128;
+        let denom = 3i128;
+        let large_down = mul_div(large_a, large_b, denom, Rounding::Down).unwrap();
+        let large_up = mul_div(large_a, large_b, denom, Rounding::Up).unwrap();
+        assert_eq!(large_up, large_down + 1);
+
+        // Bounded overflow test
+        assert_eq!(mul_div(i128::MAX, 2, 1, Rounding::Up), Err(MathError::Overflow));
     }
 }
