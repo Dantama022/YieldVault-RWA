@@ -226,3 +226,20 @@ describe("useForm", () => {
     expect(result.current.errors.amount).toBeUndefined();
   });
 });
+
+describe("useForm form-level zod errors", () => {
+  it("surfaces object-level refine errors under _form and fails validateAll", async () => {
+    const { z } = await import("zod");
+    const { renderHook, act } = await import("@testing-library/react");
+    const schema = z
+      .object({ a: z.string(), b: z.string() })
+      .refine((v) => v.a === v.b, { message: "A must equal B." });
+    const { result } = renderHook(() => useForm({ a: "x", b: "y" }, schema));
+    let ok = true;
+    act(() => {
+      ok = result.current.validateAll();
+    });
+    expect(ok).toBe(false);
+    expect(result.current.errors._form).toBe("A must equal B.");
+  });
+});

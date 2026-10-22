@@ -1,9 +1,9 @@
 use super::*;
-use crate::upgrade::{get_admin, is_initialized};
-use crate::upgrade::{PendingUpgrade, IMPLEMENTATION_SLOT, MIN_UPGRADE_DELAY_SECS};
+use crate::upgrade::{get_admin, is_initialized, PendingUpgrade, IMPLEMENTATION_SLOT, MIN_UPGRADE_DELAY_SECS};
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::{
     symbol_short, Address, BytesN, Env, IntoVal, String as SorobanString, TryFromVal,
+}
 };
 
 #[test]
@@ -64,8 +64,8 @@ fn test_storage_migration_version_guard() {
     let vault = YieldVaultClient::new(&env, &vault_id);
     vault.initialize(&admin, &token);
 
-    assert_eq!(vault.storage_version(), 3);
-    vault.migrate_storage(&3);
+    assert_eq!(vault.storage_version(), 4);
+    vault.migrate_storage(&4);
 
     let result = vault.try_migrate_storage(&1);
     assert!(matches!(
@@ -231,7 +231,7 @@ fn test_upgrade_storage_version_checkpoint() {
     vault.initialize(&admin, &token);
 
     // After initialize, storage version must equal the current storage schema.
-    assert_eq!(vault.storage_version(), 3);
+    assert_eq!(vault.storage_version(), 4);
 
     let wasm_bytes = soroban_sdk::Bytes::new(&env);
     let new_wasm_hash = env.deployer().upload_contract_wasm(wasm_bytes);
@@ -240,7 +240,7 @@ fn test_upgrade_storage_version_checkpoint() {
     let eta = vault.propose_upgrade(&new_wasm_hash);
     env.ledger().set_timestamp(eta);
     vault.execute_upgrade();
-    assert_eq!(vault.storage_version(), 3);
+    assert_eq!(vault.storage_version(), 4);
 }
 
 #[test]
@@ -255,9 +255,9 @@ fn test_upgrade_storage_version_remains_monotonic_after_migration() {
     let vault = YieldVaultClient::new(&env, &vault_id);
     vault.initialize(&admin, &token);
 
-    let result = vault.try_migrate_storage(&3);
+    let result = vault.try_migrate_storage(&4);
     assert_eq!(result, Ok(Ok(())));
-    assert_eq!(vault.storage_version(), 3);
+    assert_eq!(vault.storage_version(), 4);
 }
 
 #[test]
@@ -295,7 +295,233 @@ fn test_migrate_storage_downgrade_rejected() {
     let result = vault.try_migrate_storage(&1);
     assert!(result.is_err());
     // Version must be unchanged.
+    assert_eq!(vault.storage_version(), 4);
+}
+
+#[test]
+fn test_ttl_policy_and_entries_survive_past_default_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+
+    let vault_id = env.register(YieldVault, ());
+    let vault = YieldVaultClient::new(&env, &vault_id);
+    vault.initialize(&admin, &token_addr);
+
+    let user = Address::generate(&env);
+    let deposit_amount = 5_000_000i128;
+    token_client.mint(&user, &deposit_amount);
+
+    vault.deposit(&user, &deposit_amount);
+
+    // Verify per-user keys are in persistent storage, not instance storage
+    env.as_contract(&vault_id, || {
+        assert!(env.storage().persistent().has(&DataKey::ShareBalance(user.clone())));
+        assert!(env.storage().persistent().has(&DataKey::UserDeposit(user.clone())));
+        assert!(env.storage().persistent().has(&DataKey::LastDepositTime(user.clone())));
+
+        assert!(!env.storage().instance().has(&DataKey::ShareBalance(user.clone())));
+        assert!(!env.storage().instance().has(&DataKey::UserDeposit(user.clone())));
+        assert!(!env.storage().instance().has(&DataKey::LastDepositTime(user.clone())));
+    });
+
+    assert_eq!(vault.balance(&user), deposit_amount);
+    assert_eq!(vault.user_deposit(&user), deposit_amount);
+
+    // Advance ledger sequence by 10,000 ledgers (well past default 4096 TTL).
+    env.ledger().with_mut(|li| {
+        li.sequence_number += 10_000;
+        li.timestamp += 10_000 * 5;
+    });
+
+    // Verify user entries survived past default TTL
+    assert_eq!(vault.balance(&user), deposit_amount);
+    assert_eq!(vault.user_deposit(&user), deposit_amount);
+    assert!(vault.last_deposit_time(&user) > 0);
+
+    // Test extending TTL on read: reading extends persistent TTL
+    let balance = vault.balance(&user);
+    assert_eq!(balance, deposit_amount);
+
+    // Test extending TTL on write: withdrawal modifies state and extends persistent TTL
+    let withdraw_amount = 1_000_000i128;
+    let withdrawn = vault.withdraw(&user, &withdraw_amount);
+    assert_eq!(withdrawn, withdraw_amount);
+    assert_eq!(vault.balance(&user), deposit_amount - withdraw_amount);
+}
+
+#[test]
+fn test_migrate_storage_moves_instance_held_user_keys() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let vault_id = env.register(YieldVault, ());
+    let vault = YieldVaultClient::new(&env, &vault_id);
+    vault.initialize(&admin, &token);
+
+    let user = Address::generate(&env);
+    let dummy_user = Address::generate(&env);
+
+    // Reset storage version back to 3 to simulate legacy pre-v4 state
+    env.as_contract(&vault_id, || {
+        set_storage_version(&env, 3);
+
+        // Seed instance storage with legacy user keys
+        let sb_key = DataKey::ShareBalance(user.clone());
+        let dep_key = DataKey::UserDeposit(user.clone());
+        let ldt_key = DataKey::LastDepositTime(user.clone());
+        let pw_key = DataKey::PendingWithdrawal(user.clone());
+        let q_key = DataKey::WithdrawalQueueEntry(0);
+        let cp_key = DataKey::CheckpointTotals(1);
+        let ucp_key = DataKey::UserCheckpoint(user.clone());
+        let ub_key = DataKey::UserBalanceAt(UserBalanceKey {
+            user: user.clone(),
+            checkpoint_id: 1,
+        });
+
+        env.storage().instance().set(&sb_key, &1_234_567i128);
+        env.storage().instance().set(&dep_key, &1_000_000i128);
+        env.storage().instance().set(&ldt_key, &100u64);
+        env.storage().instance().set(
+            &pw_key,
+            &PendingWithdrawal {
+                shares: 50_000,
+                unlock_timestamp: 200,
+            },
+        );
+        env.storage().instance().set(
+            &q_key,
+            &WithdrawalQueueEntry {
+                user: dummy_user.clone(),
+                shares: 20_000,
+                assets: 20_000,
+                enqueued_at: 150,
+            },
+        );
+        env.storage().instance().set(
+            &cp_key,
+            &CheckpointTotals {
+                total_shares: 5_000_000,
+                total_assets: 5_000_000,
+            },
+        );
+        env.storage().instance().set(&ucp_key, &1u32);
+        env.storage().instance().set(&ub_key, &1_234_567i128);
+
+        // Set queue tail to 1 so queue range is 0..1
+        YieldVault::set_withdrawal_queue_tail(&env, 1);
+        // Set checkpoint nonce to 1
+        env.storage().instance().set(&DataKey::CheckpointNonce, &1u32);
+
+        // Also seed dummy_user's share balance in instance storage
+        env.storage().instance().set(&DataKey::ShareBalance(dummy_user.clone()), &99_999i128);
+
+        // Verify keys currently live in instance storage and NOT in persistent storage
+        assert!(env.storage().instance().has(&sb_key));
+        assert!(env.storage().instance().has(&dep_key));
+        assert!(env.storage().instance().has(&ldt_key));
+        assert!(env.storage().instance().has(&pw_key));
+        assert!(env.storage().instance().has(&q_key));
+        assert!(env.storage().instance().has(&cp_key));
+        assert!(env.storage().instance().has(&ucp_key));
+        assert!(env.storage().instance().has(&ub_key));
+
+        assert!(!env.storage().persistent().has(&sb_key));
+        assert!(!env.storage().persistent().has(&dep_key));
+        assert!(!env.storage().persistent().has(&ldt_key));
+        assert!(!env.storage().persistent().has(&pw_key));
+        assert!(!env.storage().persistent().has(&q_key));
+        assert!(!env.storage().persistent().has(&cp_key));
+        assert!(!env.storage().persistent().has(&ucp_key));
+        assert!(!env.storage().persistent().has(&ub_key));
+    });
+
     assert_eq!(vault.storage_version(), 3);
+
+    // Stage user for migration
+    let users = soroban_sdk::vec![&env, user.clone()];
+    vault.stage_migration_users(&users);
+
+    // Run migrate_storage(&4)
+    vault.migrate_storage(&4);
+    assert_eq!(vault.storage_version(), 4);
+
+    // Verify all keys were moved from instance to persistent storage
+    env.as_contract(&vault_id, || {
+        let sb_key = DataKey::ShareBalance(user.clone());
+        let dep_key = DataKey::UserDeposit(user.clone());
+        let ldt_key = DataKey::LastDepositTime(user.clone());
+        let pw_key = DataKey::PendingWithdrawal(user.clone());
+        let q_key = DataKey::WithdrawalQueueEntry(0);
+        let cp_key = DataKey::CheckpointTotals(1);
+        let ucp_key = DataKey::UserCheckpoint(user.clone());
+        let ub_key = DataKey::UserBalanceAt(UserBalanceKey {
+            user: user.clone(),
+            checkpoint_id: 1,
+        });
+
+        // Instance storage must no longer have them
+        assert!(!env.storage().instance().has(&sb_key));
+        assert!(!env.storage().instance().has(&dep_key));
+        assert!(!env.storage().instance().has(&ldt_key));
+        assert!(!env.storage().instance().has(&pw_key));
+        assert!(!env.storage().instance().has(&q_key));
+        assert!(!env.storage().instance().has(&cp_key));
+        assert!(!env.storage().instance().has(&ucp_key));
+        assert!(!env.storage().instance().has(&ub_key));
+
+        // Dummy user from queue entry was also migrated
+        assert!(!env.storage().instance().has(&DataKey::ShareBalance(dummy_user.clone())));
+        assert!(env.storage().persistent().has(&DataKey::ShareBalance(dummy_user.clone())));
+
+        // Persistent storage must now have all of them
+        assert!(env.storage().persistent().has(&sb_key));
+        assert!(env.storage().persistent().has(&dep_key));
+        assert!(env.storage().persistent().has(&ldt_key));
+        assert!(env.storage().persistent().has(&pw_key));
+        assert!(env.storage().persistent().has(&q_key));
+        assert!(env.storage().persistent().has(&cp_key));
+        assert!(env.storage().persistent().has(&ucp_key));
+        assert!(env.storage().persistent().has(&ub_key));
+    });
+
+    // Verify through public getters
+    assert_eq!(vault.balance(&user), 1_234_567);
+    assert_eq!(vault.user_deposit(&user), 1_000_000);
+    assert_eq!(vault.last_deposit_time(&user), 100);
+    assert_eq!(
+        vault.pending_withdrawal(&user),
+        Some(PendingWithdrawal {
+            shares: 50_000,
+            unlock_timestamp: 200,
+        })
+    );
+    assert_eq!(
+        vault.withdrawal_queue_entry(&0),
+        Some(WithdrawalQueueEntry {
+            user: dummy_user.clone(),
+            shares: 20_000,
+            assets: 20_000,
+            enqueued_at: 150,
+        })
+    );
+    assert_eq!(
+        vault.total_shares_at(&1),
+        5_000_000
+    );
+    assert_eq!(
+        vault.balance_at(&user, &1),
+        1_234_567
+    );
 }
 
 // ─── Timelocked upgrade + implementation slot (issue #1543) ────────────────

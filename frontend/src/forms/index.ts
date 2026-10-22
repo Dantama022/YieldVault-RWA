@@ -1,10 +1,13 @@
 export { useForm } from "./useForm";
+export { FORM_ERROR_KEY } from "./zodValidate";
+export type { FormErrors as FormErrorMap } from "./zodValidate";
 export { validate } from "./validate";
 export type { ValidationRule, ValidationSchema } from "./validate";
 
 export { default as FormField } from "./components/FormField";
 export { default as FormSelect } from "./components/FormSelect";
 export { default as FormTextarea } from "./components/FormTextarea";
+export { default as FormErrors } from "./components/FormErrors";
 export { default as SubmitButton } from "./components/SubmitButton";
 
 export type { FormFieldProps } from "./components/FormField";

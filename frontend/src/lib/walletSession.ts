@@ -1,3 +1,5 @@
+import { readVersionedItem, writeVersionedItem } from "./versionedStorage";
+
 /** Session flag: user chose Disconnect; skip Freighter auto-reconnect until they connect again. */
 export const WALLET_MANUAL_DISCONNECT_KEY = "yieldvault_wallet_manual_disconnect";
 
@@ -23,10 +25,19 @@ export const WALLET_SESSION_START_KEY = "wallet_session_start";
 /** Read the persisted session start, or `null` when there is no valid one. */
 export function getWalletSessionStart(): number | null {
   if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem(WALLET_SESSION_START_KEY);
-  if (!raw) return null;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) ? parsed : null;
+  return readVersionedItem<number>(WALLET_SESSION_START_KEY, {
+    version: WALLET_SESSION_START_VERSION,
+    parseData: toTimestamp,
+    // Legacy format: the epoch-ms timestamp as a bare string.
+    migrateLegacy: toTimestamp,
+  });
+}
+
+const WALLET_SESSION_START_VERSION = 1;
+
+function toTimestamp(value: unknown): number | null {
+  const n = typeof value === "string" ? Number.parseInt(value, 10) : value;
+  return typeof n === "number" && Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -36,7 +47,7 @@ export function getWalletSessionStart(): number | null {
  */
 export function startWalletSession(now: number = Date.now()): void {
   if (typeof window === "undefined") return;
-  localStorage.setItem(WALLET_SESSION_START_KEY, String(now));
+  writeVersionedItem(WALLET_SESSION_START_KEY, WALLET_SESSION_START_VERSION, now);
 }
 
 /** Persisted last-used wallet provider across sessions. */

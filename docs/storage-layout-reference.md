@@ -30,9 +30,14 @@ YieldVault uses a **namespace-partitioned storage model** with explicit collisio
   - Protected by EIP-1967-style hashed slot constants
 
 - **Vault Instance Storage** (`DataKey` enum, `lib.rs`)
-  - Contains all protocol state variables
-  - Organized into nine namespaces via `StorageNamespace` enum
-  - Subject to upgrade migrations and version tracking
+  - Contains global protocol state variables (Core, Governance, Fees, etc.)
+  - Kept lightweight to minimize transaction footprints
+  - Bounded TTL managed via `INSTANCE_LIFETIME_THRESHOLD` and `INSTANCE_BUMP_AMOUNT`
+
+- **Vault Persistent Storage** (`DataKey` enum, `lib.rs`)
+  - Contains per-user entries and historical snapshots (User, Checkpoint, Withdrawal queue entries)
+  - Dedicated storage entry per key; unbounded scaling without bloating instance state
+  - Managed via `PERSISTENT_LIFETIME_THRESHOLD` and `PERSISTENT_BUMP_AMOUNT` (see [`docs/storage-ttl-policy.md`](./storage-ttl-policy.md))
 
 ---
 
@@ -559,7 +564,11 @@ Before deploying contract upgrades, verify:
 
 | Constant | Value | Purpose |
 |---|---|---|
-| `STORAGE_VERSION` | 2 | Current schema version |
+| `STORAGE_VERSION` | 4 | Current schema version |
+| `INSTANCE_LIFETIME_THRESHOLD` | 17,280 | Min instance TTL before extension (~1 day) |
+| `INSTANCE_BUMP_AMOUNT` | 518,400 | Instance TTL extension target (~30 days) |
+| `PERSISTENT_LIFETIME_THRESHOLD` | 120,960 | Min persistent TTL before extension (~7 days) |
+| `PERSISTENT_BUMP_AMOUNT` | 518,400 | Persistent TTL extension target (~30 days) |
 | `MAX_PAGE_SIZE` | 50 | Max items in paginated queries |
 | `SHARE_PRICE_SCALE` | 1e18 | Decimal scaling for share price math |
 | `IMPLEMENTATION_SLOT` | `0x360894a...` | EIP-1967 proxy implementation slot hash |

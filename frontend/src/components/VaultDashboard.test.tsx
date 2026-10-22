@@ -296,7 +296,9 @@ describe("VaultDashboard", () => {
     await waitFor(() => {
       expect(confetti).toHaveBeenCalled();
     });
-    expect(localStorage.getItem("yieldvault:first-deposit:GFIRSTDEPOSITWALLET000000000000000000000000000000")).toBe("true");
+    expect(localStorage.getItem("yieldvault:first-deposit:GFIRSTDEPOSITWALLET000000000000000000000000000000")).toBe(
+      JSON.stringify({ version: 1, data: true }),
+    );
   });
 
   it("shows a View on Explorer link after a successful deposit that returns a transaction hash", async () => {

@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { readVersionedItem, writeVersionedItem } from '../lib/versionedStorage';
 
 export type Theme = 'light' | 'dark' | 'system';
 export type Locale = 'en-US' | 'en-GB' | 'de-DE' | 'fr-FR' | 'ja-JP' | 'zh-CN';
@@ -51,30 +52,34 @@ function getStorageKey(walletAddress?: string | null): string {
   return `${STORAGE_KEY_PREFIX}:${walletScope}`;
 }
 
+export const PREFERENCES_STORAGE_VERSION = 1;
+
+function normalizePreferences(value: unknown): UserPreferences | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const parsed = value as Partial<UserPreferences>;
+  return {
+    ...DEFAULT_PREFERENCES,
+    ...parsed,
+    notifications: {
+      ...DEFAULT_PREFERENCES.notifications,
+      ...(parsed.notifications ?? {}),
+    },
+  };
+}
+
 function loadPreferences(walletAddress?: string | null): UserPreferences {
-  try {
-    const raw = localStorage.getItem(getStorageKey(walletAddress));
-    if (!raw) return DEFAULT_PREFERENCES;
-    const parsed = JSON.parse(raw) as Partial<UserPreferences>;
-    return {
-      ...DEFAULT_PREFERENCES,
-      ...parsed,
-      notifications: {
-        ...DEFAULT_PREFERENCES.notifications,
-        ...(parsed.notifications ?? {}),
-      },
-    };
-  } catch {
-    return DEFAULT_PREFERENCES;
-  }
+  return (
+    readVersionedItem<UserPreferences>(getStorageKey(walletAddress), {
+      version: PREFERENCES_STORAGE_VERSION,
+      parseData: normalizePreferences,
+      // Legacy format: the bare preferences object (no envelope).
+      migrateLegacy: normalizePreferences,
+    }) ?? DEFAULT_PREFERENCES
+  );
 }
 
 function savePreferences(prefs: UserPreferences, walletAddress?: string | null): void {
-  try {
-    localStorage.setItem(getStorageKey(walletAddress), JSON.stringify(prefs));
-  } catch {
-    // storage quota exceeded or unavailable — silently ignore
-  }
+  writeVersionedItem(getStorageKey(walletAddress), PREFERENCES_STORAGE_VERSION, prefs);
 }
 
 export function usePreferences(walletAddress?: string | null) {

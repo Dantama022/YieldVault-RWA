@@ -1,13 +1,26 @@
 import React, { useState } from "react";
 import { X, ChevronRight, ChevronLeft } from "lucide-react";
 import { useTranslation } from "../i18n";
+import { readVersionedItem, writeVersionedItem } from "../lib/versionedStorage";
 
 const LOCAL_STORAGE_KEY = "hasSeenWalkthrough";
+const STORAGE_VERSION = 1;
+
+// Legacy format: the string "true"; any pre-envelope value counted as seen.
+const toSeen = (value: unknown): boolean | null =>
+  typeof value === "boolean" ? value : value === "true" || value === true ? true : null;
+
+const hasSeenWalkthrough = (): boolean =>
+  readVersionedItem<boolean>(LOCAL_STORAGE_KEY, {
+    version: STORAGE_VERSION,
+    parseData: toSeen,
+    migrateLegacy: () => true,
+  }) === true;
 
 const OnboardingWalkthrough: React.FC = () => {
   const { t } = useTranslation();
   const [isVisible, setIsVisible] = useState(
-    () => !localStorage.getItem(LOCAL_STORAGE_KEY),
+    () => !hasSeenWalkthrough(),
   );
   const [currentStep, setCurrentStep] = useState(0);
 
@@ -19,7 +32,7 @@ const OnboardingWalkthrough: React.FC = () => {
   ];
 
   const handleDismiss = () => {
-    localStorage.setItem(LOCAL_STORAGE_KEY, "true");
+    writeVersionedItem(LOCAL_STORAGE_KEY, STORAGE_VERSION, true);
     setIsVisible(false);
   };
 

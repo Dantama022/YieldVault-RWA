@@ -71,8 +71,10 @@ import { t } from "../i18n";
 import { useTransactionHistory } from "../hooks/useTransactionData";
 import TransactionTimeline, { type TxTimelineStatus } from "./TransactionTimeline";
 import Badge from "./Badge";
+import { readVersionedItem, writeVersionedItem } from "../lib/versionedStorage";
 
 const FIRST_DEPOSIT_PREFIX = "yieldvault:first-deposit:";
+const FIRST_DEPOSIT_VERSION = 1;
 const MAX_TRANSACTION_RETRY_ATTEMPTS = 3;
 
 function prefersReducedMotion(): boolean {
@@ -676,9 +678,15 @@ const VaultDashboard: React.FC<VaultDashboardProps> = ({
 
         try {
           const depositKey = `${FIRST_DEPOSIT_PREFIX}${walletAddress}`;
-          const alreadyCelebrated = localStorage.getItem(depositKey) === "true";
+          const alreadyCelebrated =
+            readVersionedItem<boolean>(depositKey, {
+              version: FIRST_DEPOSIT_VERSION,
+              parseData: (data) => (data === true ? true : null),
+              // Legacy format: the string "true".
+              migrateLegacy: (legacy) => (legacy === true ? true : null),
+            }) === true;
           if (!alreadyCelebrated) {
-            localStorage.setItem(depositKey, "true");
+            writeVersionedItem(depositKey, FIRST_DEPOSIT_VERSION, true);
             runDepositConfetti();
           }
         } catch (storageErr) {

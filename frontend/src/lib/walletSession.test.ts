@@ -127,7 +127,7 @@ describe("walletSession start timestamp helpers", () => {
   it("persists the session start through startWalletSession", () => {
     startWalletSession(1_700_000_000_000);
     expect(localStorage.getItem(WALLET_SESSION_START_KEY)).toBe(
-      "1700000000000",
+      '{"version":1,"data":1700000000000}',
     );
     expect(getWalletSessionStart()).toBe(1_700_000_000_000);
   });

@@ -135,7 +135,7 @@ describe("performConnect error mapping (issue #1625)", () => {
     expect(sessionStart).not.toBeNull();
     expect(sessionStart as number).toBeGreaterThanOrEqual(before);
     expect(localStorage.getItem(WALLET_SESSION_START_KEY)).toBe(
-      String(sessionStart),
+      JSON.stringify({ version: 1, data: sessionStart }),
     );
   });
 });

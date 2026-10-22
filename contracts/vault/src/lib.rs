@@ -140,9 +140,20 @@ use soroban_sdk::{
 
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const STORAGE_VERSION: u32 = 3;
+const STORAGE_VERSION: u32 = 4;
 const MAX_PAGE_SIZE: u32 = 50;
 const SHARE_PRICE_SCALE: i128 = 1_000_000_000_000_000_000;
+
+/// Storage TTL policy thresholds and bump amounts (in ledgers).
+///
+/// Stellar ledgers close every ~5 seconds:
+/// - 17,280 ledgers ≈ 1 day
+/// - 120,960 ledgers ≈ 7 days
+/// - 518,400 ledgers ≈ 30 days
+pub const INSTANCE_LIFETIME_THRESHOLD: u32 = 17_280;
+pub const INSTANCE_BUMP_AMOUNT: u32 = 518_400;
+pub const PERSISTENT_LIFETIME_THRESHOLD: u32 = 120_960;
+pub const PERSISTENT_BUMP_AMOUNT: u32 = 518_400;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -388,7 +399,18 @@ pub struct StrategyProposal {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
 /// Pending large withdrawal with 24-hour timelock.
+///
+/// ## Share Price Behavior
+///
+/// The shares recorded here are NOT reserved or priced at request time.
+/// When `execute_withdrawal` is called after the timelock expires, the shares
+/// are converted to assets using the then-current `total_assets` and `total_shares`.
+/// This means the user's effective share price depends on what happens during the
+/// timelock period (yield accrual, deposits, other withdrawals, etc.).
+///
+/// Related: issue #1683
 pub struct PendingWithdrawal {
     pub shares: i128,
     pub unlock_timestamp: u64,
@@ -517,6 +539,7 @@ impl YieldVault {
         set_admin(&env, &admin);
         set_initialized(&env);
         set_storage_version(&env, STORAGE_VERSION);
+        Self::bump_instance_ttl(&env);
 
         env.storage().instance().set(&DataKey::TokenAsset, &token);
         env.storage().instance().set(&DataKey::TotalAssets, &0i128);
@@ -858,11 +881,6 @@ impl YieldVault {
                 .get(&DataKey::LastStrategySwitchTime)
                 .unwrap_or(0);
             let earliest_switch = last_switch.saturating_add(cooldown);
-            if env.ledger().timestamp() < earliest_switch {
-            let earliest_switch = last_switch.checked_add(cooldown).expect("overflow");
-            if now < earliest_switch {
-                return Err(VaultError::AdminParamChangeTooSoon);
-            }
         }
 
         let current_strategy = Self::strategy(env.clone());
@@ -1366,10 +1384,337 @@ impl YieldVault {
     }
 
     pub fn user_deposit(env: Env, user: Address) -> i128 {
+        Self::get_user_deposit(&env, &user)
+    }
+
+    pub fn last_deposit_time(env: Env, user: Address) -> u64 {
+        Self::get_last_deposit_time(&env, &user)
+    }
+
+    pub fn pending_withdrawal(env: Env, user: Address) -> Option<PendingWithdrawal> {
+        Self::get_pending_withdrawal(&env, &user)
+    }
+
+    pub fn user_checkpoint(env: Env, user: Address) -> Option<u32> {
+        Self::get_user_checkpoint(&env, &user)
+    }
+
+    pub fn withdrawal_queue_entry(env: Env, sequence: u64) -> Option<WithdrawalQueueEntry> {
+        Self::get_withdrawal_queue_entry(&env, sequence)
+    }
+
+    pub fn stage_migration_users(env: Env, users: Vec<Address>) -> Result<(), VaultError> {
+        let admin = get_admin(&env).expect("Admin not set");
+        admin.require_auth();
         env.storage()
             .instance()
-            .get(&DataKey::UserDeposit(user))
-            .unwrap_or(0)
+            .set(&soroban_sdk::symbol_short!("mig_usr"), &users);
+        Ok(())
+    }
+
+    pub fn migrate_user_storage(env: Env, users: Vec<Address>) -> Result<(), VaultError> {
+        let admin = get_admin(&env).expect("Admin not set");
+        admin.require_auth();
+        for i in 0..users.len() {
+            let u = users.get(i).unwrap();
+            Self::migrate_single_user_keys(&env, &u);
+        }
+        Ok(())
+    }
+
+    /// Extends instance storage TTL to INSTANCE_BUMP_AMOUNT if below INSTANCE_LIFETIME_THRESHOLD.
+    fn bump_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Extends persistent storage TTL for a key to PERSISTENT_BUMP_AMOUNT if below PERSISTENT_LIFETIME_THRESHOLD.
+    fn extend_persistent_ttl<K: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(env: &Env, key: &K) {
+        env.storage().persistent().extend_ttl(
+            key,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+    }
+
+    fn get_share_balance(env: &Env, user: &Address) -> i128 {
+        let key = DataKey::ShareBalance(user.clone());
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(env, &key);
+            env.storage().persistent().get(&key).unwrap_or(0)
+        } else if env.storage().instance().has(&key) {
+            let val: i128 = env.storage().instance().get(&key).unwrap_or(0);
+            env.storage().instance().remove(&key);
+            env.storage().persistent().set(&key, &val);
+            Self::extend_persistent_ttl(env, &key);
+            val
+        } else {
+            0
+        }
+    }
+
+    fn set_share_balance(env: &Env, user: &Address, balance: i128) {
+        let key = DataKey::ShareBalance(user.clone());
+        if env.storage().instance().has(&key) {
+            env.storage().instance().remove(&key);
+        }
+        env.storage().persistent().set(&key, &balance);
+        Self::extend_persistent_ttl(env, &key);
+    }
+
+    fn get_user_deposit(env: &Env, user: &Address) -> i128 {
+        let key = DataKey::UserDeposit(user.clone());
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(env, &key);
+            env.storage().persistent().get(&key).unwrap_or(0)
+        } else if env.storage().instance().has(&key) {
+            let val: i128 = env.storage().instance().get(&key).unwrap_or(0);
+            env.storage().instance().remove(&key);
+            env.storage().persistent().set(&key, &val);
+            Self::extend_persistent_ttl(env, &key);
+            val
+        } else {
+            0
+        }
+    }
+
+    fn set_user_deposit(env: &Env, user: &Address, amount: i128) {
+        let key = DataKey::UserDeposit(user.clone());
+        if env.storage().instance().has(&key) {
+            env.storage().instance().remove(&key);
+        }
+        env.storage().persistent().set(&key, &amount);
+        Self::extend_persistent_ttl(env, &key);
+    }
+
+    fn get_last_deposit_time(env: &Env, user: &Address) -> u64 {
+        let key = DataKey::LastDepositTime(user.clone());
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(env, &key);
+            env.storage().persistent().get(&key).unwrap_or(0)
+        } else if env.storage().instance().has(&key) {
+            let val: u64 = env.storage().instance().get(&key).unwrap_or(0);
+            env.storage().instance().remove(&key);
+            env.storage().persistent().set(&key, &val);
+            Self::extend_persistent_ttl(env, &key);
+            val
+        } else {
+            0
+        }
+    }
+
+    fn set_last_deposit_time(env: &Env, user: &Address, timestamp: u64) {
+        let key = DataKey::LastDepositTime(user.clone());
+        if env.storage().instance().has(&key) {
+            env.storage().instance().remove(&key);
+        }
+        env.storage().persistent().set(&key, &timestamp);
+        Self::extend_persistent_ttl(env, &key);
+    }
+
+    fn get_pending_withdrawal(env: &Env, user: &Address) -> Option<PendingWithdrawal> {
+        let key = DataKey::PendingWithdrawal(user.clone());
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(env, &key);
+            env.storage().persistent().get(&key)
+        } else if env.storage().instance().has(&key) {
+            let val: PendingWithdrawal = env.storage().instance().get(&key).unwrap();
+            env.storage().instance().remove(&key);
+            env.storage().persistent().set(&key, &val);
+            Self::extend_persistent_ttl(env, &key);
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    fn set_pending_withdrawal(env: &Env, user: &Address, pending: &PendingWithdrawal) {
+        let key = DataKey::PendingWithdrawal(user.clone());
+        if env.storage().instance().has(&key) {
+            env.storage().instance().remove(&key);
+        }
+        env.storage().persistent().set(&key, pending);
+        Self::extend_persistent_ttl(env, &key);
+    }
+
+    fn remove_pending_withdrawal(env: &Env, user: &Address) {
+        let key = DataKey::PendingWithdrawal(user.clone());
+        if env.storage().instance().has(&key) {
+            env.storage().instance().remove(&key);
+        }
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+        }
+    }
+
+    fn get_withdrawal_queue_entry(env: &Env, seq: u64) -> Option<WithdrawalQueueEntry> {
+        let key = DataKey::WithdrawalQueueEntry(seq);
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(env, &key);
+            env.storage().persistent().get(&key)
+        } else if env.storage().instance().has(&key) {
+            let val: WithdrawalQueueEntry = env.storage().instance().get(&key).unwrap();
+            env.storage().instance().remove(&key);
+            env.storage().persistent().set(&key, &val);
+            Self::extend_persistent_ttl(env, &key);
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    fn set_withdrawal_queue_entry(env: &Env, seq: u64, entry: &WithdrawalQueueEntry) {
+        let key = DataKey::WithdrawalQueueEntry(seq);
+        if env.storage().instance().has(&key) {
+            env.storage().instance().remove(&key);
+        }
+        env.storage().persistent().set(&key, entry);
+        Self::extend_persistent_ttl(env, &key);
+    }
+
+    fn remove_withdrawal_queue_entry(env: &Env, seq: u64) {
+        let key = DataKey::WithdrawalQueueEntry(seq);
+        if env.storage().instance().has(&key) {
+            env.storage().instance().remove(&key);
+        }
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+        }
+    }
+
+    fn get_checkpoint_totals(env: &Env, checkpoint_id: u32) -> Option<CheckpointTotals> {
+        let key = DataKey::CheckpointTotals(checkpoint_id);
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(env, &key);
+            env.storage().persistent().get(&key)
+        } else if env.storage().instance().has(&key) {
+            let val: CheckpointTotals = env.storage().instance().get(&key).unwrap();
+            env.storage().instance().remove(&key);
+            env.storage().persistent().set(&key, &val);
+            Self::extend_persistent_ttl(env, &key);
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    fn set_checkpoint_totals(env: &Env, checkpoint_id: u32, totals: &CheckpointTotals) {
+        let key = DataKey::CheckpointTotals(checkpoint_id);
+        if env.storage().instance().has(&key) {
+            env.storage().instance().remove(&key);
+        }
+        env.storage().persistent().set(&key, totals);
+        Self::extend_persistent_ttl(env, &key);
+    }
+
+    fn get_user_checkpoint(env: &Env, user: &Address) -> Option<u32> {
+        let key = DataKey::UserCheckpoint(user.clone());
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(env, &key);
+            env.storage().persistent().get(&key)
+        } else if env.storage().instance().has(&key) {
+            let val: u32 = env.storage().instance().get(&key).unwrap();
+            env.storage().instance().remove(&key);
+            env.storage().persistent().set(&key, &val);
+            Self::extend_persistent_ttl(env, &key);
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    fn set_user_checkpoint(env: &Env, user: &Address, checkpoint_id: u32) {
+        let key = DataKey::UserCheckpoint(user.clone());
+        if env.storage().instance().has(&key) {
+            env.storage().instance().remove(&key);
+        }
+        env.storage().persistent().set(&key, &checkpoint_id);
+        Self::extend_persistent_ttl(env, &key);
+    }
+
+    fn get_user_balance_at(env: &Env, user: &Address, checkpoint_id: u32) -> i128 {
+        let key = DataKey::UserBalanceAt(UserBalanceKey {
+            user: user.clone(),
+            checkpoint_id,
+        });
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(env, &key);
+            env.storage().persistent().get(&key).unwrap_or(0)
+        } else if env.storage().instance().has(&key) {
+            let val: i128 = env.storage().instance().get(&key).unwrap_or(0);
+            env.storage().instance().remove(&key);
+            env.storage().persistent().set(&key, &val);
+            Self::extend_persistent_ttl(env, &key);
+            val
+        } else {
+            0
+        }
+    }
+
+    fn set_user_balance_at(env: &Env, user: &Address, checkpoint_id: u32, balance: i128) {
+        let key = DataKey::UserBalanceAt(UserBalanceKey {
+            user: user.clone(),
+            checkpoint_id,
+        });
+        if env.storage().instance().has(&key) {
+            env.storage().instance().remove(&key);
+        }
+        env.storage().persistent().set(&key, &balance);
+        Self::extend_persistent_ttl(env, &key);
+    }
+
+    fn migrate_single_user_keys(env: &Env, user: &Address) {
+        let sb_key = DataKey::ShareBalance(user.clone());
+        if env.storage().instance().has(&sb_key) {
+            let val: i128 = env.storage().instance().get(&sb_key).unwrap();
+            env.storage().instance().remove(&sb_key);
+            Self::set_share_balance(env, user, val);
+        }
+        let dep_key = DataKey::UserDeposit(user.clone());
+        if env.storage().instance().has(&dep_key) {
+            let val: i128 = env.storage().instance().get(&dep_key).unwrap();
+            env.storage().instance().remove(&dep_key);
+            Self::set_user_deposit(env, user, val);
+        }
+        let ldt_key = DataKey::LastDepositTime(user.clone());
+        if env.storage().instance().has(&ldt_key) {
+            let val: u64 = env.storage().instance().get(&ldt_key).unwrap();
+            env.storage().instance().remove(&ldt_key);
+            Self::set_last_deposit_time(env, user, val);
+        }
+        let pw_key = DataKey::PendingWithdrawal(user.clone());
+        if env.storage().instance().has(&pw_key) {
+            let val: PendingWithdrawal = env.storage().instance().get(&pw_key).unwrap();
+            env.storage().instance().remove(&pw_key);
+            Self::set_pending_withdrawal(env, user, &val);
+        }
+        let ucp_key = DataKey::UserCheckpoint(user.clone());
+        let nonce = env
+            .storage()
+            .instance()
+            .get::<_, u32>(&DataKey::CheckpointNonce)
+            .unwrap_or(0);
+        let mut max_cp = nonce;
+        if env.storage().instance().has(&ucp_key) {
+            let val: u32 = env.storage().instance().get(&ucp_key).unwrap();
+            env.storage().instance().remove(&ucp_key);
+            Self::set_user_checkpoint(env, user, val);
+            if val > max_cp {
+                max_cp = val;
+            }
+        }
+        for cp in 1..=max_cp {
+            let ub_key = DataKey::UserBalanceAt(UserBalanceKey {
+                user: user.clone(),
+                checkpoint_id: cp,
+            });
+            if env.storage().instance().has(&ub_key) {
+                let bal: i128 = env.storage().instance().get(&ub_key).unwrap();
+                env.storage().instance().remove(&ub_key);
+                Self::set_user_balance_at(env, user, cp, bal);
+            }
+        }
     }
 
     fn get_state(env: &Env) -> VaultState {
@@ -1476,43 +1821,19 @@ impl YieldVault {
                     let oracle_client = OracleClient::new(&env, &oracle_addr);
                     let price_data = oracle_client.get_price(&token, &token);
                     let max_age = Self::oracle_heartbeat(env.clone());
-                    let last: Option<oracle::PriceData> = env
-                        .storage()
-                        .instance()
-                        .get(&DataKeyExt::Risk(RiskExtKey::LastPx));
-                    let _last_price = Self::last_oracle_price(&env);
+
                     let last_price = Self::last_oracle_price(&env);
                     oracle::OracleValidator::validate_price_data(
                         &env,
                         &price_data,
                         max_age,
                         Some(oracle::MAX_PRICE_DEVIATION_BPS),
-                        last.as_ref(),
                         last_price.as_ref(),
                     )
                     .map_err(|_| VaultError::OracleValidationFailed)?;
                     Self::set_last_oracle_price(&env, &price_data);
                 }
-        let token = Self::token(env.clone());
-        if Self::is_oracle_enabled(env.clone()) {
-            if let Some(oracle_addr) = Self::price_oracle(env.clone()) {
-                let oracle_client = OracleClient::new(&env, &oracle_addr);
-                let price_data = oracle_client.get_price(&token, &token);
-                let max_age = Self::oracle_heartbeat(env.clone());
-                let last_price = Self::last_oracle_price(&env);
-                oracle::OracleValidator::validate_price_data(
-                    &env,
-                    &price_data,
-                    max_age,
-                    Some(oracle::MAX_PRICE_DEVIATION_BPS),
-                    last_price.as_ref(),
-                )
-                .map_err(|_| VaultError::OracleValidationFailed)?;
-                Self::set_last_oracle_price(&env, &price_data);
             }
-        }
-
-        let strategy_assets = if let Some(strategy_addr) = Self::strategy(env.clone()) {
             Self::require_valid_strategy_response(&env, &strategy_addr, &token)
         } else {
             0
@@ -1571,10 +1892,7 @@ impl YieldVault {
     }
 
     pub fn balance(env: Env, user: Address) -> i128 {
-        env.storage()
-            .instance()
-            .get(&DataKey::ShareBalance(user))
-            .unwrap_or(0)
+        Self::get_share_balance(&env, &user)
     }
 
     pub fn create_checkpoint(env: Env) -> u32 {
@@ -1593,30 +1911,28 @@ impl YieldVault {
         env.storage()
             .instance()
             .set(&DataKey::CheckpointNonce, &next_checkpoint);
-        env.storage().instance().set(
-            &DataKey::CheckpointTotals(next_checkpoint),
+        Self::set_checkpoint_totals(
+            &env,
+            next_checkpoint,
             &CheckpointTotals {
                 total_shares: state.total_shares,
                 total_assets: state.total_assets,
             },
         );
+        Self::bump_instance_ttl(&env);
         env.events()
             .publish((symbol_short!("chkpoint"),), (next_checkpoint,));
         next_checkpoint
     }
 
     pub fn total_shares_at(env: Env, checkpoint_id: u32) -> i128 {
-        env.storage()
-            .instance()
-            .get::<_, CheckpointTotals>(&DataKey::CheckpointTotals(checkpoint_id))
+        Self::get_checkpoint_totals(&env, checkpoint_id)
             .map(|totals| totals.total_shares)
             .unwrap_or(0)
     }
 
     pub fn total_assets_at(env: Env, checkpoint_id: u32) -> i128 {
-        env.storage()
-            .instance()
-            .get::<_, CheckpointTotals>(&DataKey::CheckpointTotals(checkpoint_id))
+        Self::get_checkpoint_totals(&env, checkpoint_id)
             .map(|totals| totals.total_assets)
             .unwrap_or(0)
     }
@@ -1632,27 +1948,14 @@ impl YieldVault {
             None => return Err(VaultError::NoPendingWithdrawal),
         };
         let balance = Self::balance(env.clone(), user.clone());
-        env.storage()
-            .instance()
-            .set(&DataKey::UserCheckpoint(user.clone()), &checkpoint_id);
-        env.storage().instance().set(
-            &DataKey::UserBalanceAt(UserBalanceKey {
-                user: user.clone(),
-                checkpoint_id,
-            }),
-            &balance,
-        );
+        Self::set_user_checkpoint(&env, &user, checkpoint_id);
+        Self::set_user_balance_at(&env, &user, checkpoint_id, balance);
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
     pub fn balance_at(env: Env, user: Address, checkpoint_id: u32) -> i128 {
-        env.storage()
-            .instance()
-            .get(&DataKey::UserBalanceAt(UserBalanceKey {
-                user,
-                checkpoint_id,
-            }))
-            .unwrap_or(0)
+        Self::get_user_balance_at(&env, &user, checkpoint_id)
     }
 
     pub fn benji_strategy(env: Env) -> Address {
@@ -2294,8 +2597,7 @@ impl YieldVault {
             return Err(Self::reject_dust_deposit(&env, &user, amount, &state));
         }
 
-        let deposit_key = DataKey::UserDeposit(user.clone());
-        let current_deposit: i128 = env.storage().instance().get(&deposit_key).unwrap_or(0);
+        let current_deposit: i128 = Self::get_user_deposit(&env, &user);
         let new_deposit = current_deposit
             .checked_add(amount)
             .ok_or(VaultError::MathOverflow)?;
@@ -2323,8 +2625,7 @@ impl YieldVault {
         };
         let dust = amount.checked_sub(effective_assets).unwrap_or(0);
 
-        let user_key = DataKey::ShareBalance(user.clone());
-        let user_shares: i128 = env.storage().instance().get(&user_key).unwrap_or(0);
+        let user_shares: i128 = Self::get_share_balance(&env, &user);
         let updated_user_shares = user_shares
             .checked_add(shares_to_mint)
             .ok_or(VaultError::MathOverflow)?;
@@ -2334,7 +2635,7 @@ impl YieldVault {
                 assert!(shares_to_mint > 0 && new_deposit <= cap);
             },
             effects: {
-                env.storage().instance().set(&deposit_key, &new_deposit);
+                Self::set_user_deposit(&env, &user, new_deposit);
 
                 if dust > 0 {
                     let treasury_bal: i128 = env
@@ -2360,11 +2661,9 @@ impl YieldVault {
                     .ok_or(VaultError::MathOverflow)?;
                 Self::persist_accounting_state(&env, &state)?;
                 Self::bump_idle_accounting(&env, effective_assets, shares_to_mint);
-                env.storage().instance().set(&user_key, &updated_user_shares);
-                env.storage().instance().set(
-                    &DataKey::LastDepositTime(user.clone()),
-                    &env.ledger().timestamp(),
-                );
+                Self::set_share_balance(&env, &user, updated_user_shares);
+                Self::set_last_deposit_time(&env, &user, env.ledger().timestamp());
+                Self::bump_instance_ttl(&env);
                 env.events().publish(
                     (symbol_short!("deposit"), user.clone()),
                     (amount, shares_to_mint),
@@ -2491,8 +2790,7 @@ impl YieldVault {
         }
 
         // Per-user deposit cap check
-        let deposit_key = DataKey::UserDeposit(user.clone());
-        let current_deposit: i128 = env.storage().instance().get(&deposit_key).unwrap_or(0);
+        let current_deposit: i128 = Self::get_user_deposit(&env, &user);
         let new_deposit = current_deposit
             .checked_add(amount)
             .ok_or(VaultError::MathOverflow)?;
@@ -2518,8 +2816,7 @@ impl YieldVault {
         };
         let dust = amount.checked_sub(effective_assets).unwrap_or(0);
 
-        let user_key = DataKey::ShareBalance(user.clone());
-        let user_shares: i128 = env.storage().instance().get(&user_key).unwrap_or(0);
+        let user_shares: i128 = Self::get_share_balance(&env, &user);
         let updated_user_shares = user_shares
             .checked_add(shares_to_mint)
             .ok_or(VaultError::MathOverflow)?;
@@ -2529,7 +2826,7 @@ impl YieldVault {
                 assert!(shares_to_mint > 0 && new_deposit <= cap);
             },
             effects: {
-                env.storage().instance().set(&deposit_key, &new_deposit);
+                Self::set_user_deposit(&env, &user, new_deposit);
                 if dust > 0 {
                     let treasury_bal: i128 = env
                         .storage()
@@ -2553,11 +2850,9 @@ impl YieldVault {
                     .ok_or(VaultError::MathOverflow)?;
                 Self::persist_accounting_state(&env, &state)?;
                 Self::bump_idle_accounting(&env, effective_assets, shares_to_mint);
-                env.storage().instance().set(&user_key, &updated_user_shares);
-                env.storage().instance().set(
-                    &DataKey::LastDepositTime(user.clone()),
-                    &env.ledger().timestamp(),
-                );
+                Self::set_share_balance(&env, &user, updated_user_shares);
+                Self::set_last_deposit_time(&env, &user, env.ledger().timestamp());
+                Self::bump_instance_ttl(&env);
                 env.events().publish(
                     (symbol_short!("glessdep"), relayer.clone()),
                     (user.clone(), amount, shares_to_mint),
@@ -2736,6 +3031,7 @@ impl YieldVault {
 
         // Persist the updated vault state once after all entries are processed
         Self::persist_accounting_state(&env, &state)?;
+        Self::bump_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("batchdep"), relayer.clone()),
@@ -2802,8 +3098,7 @@ impl YieldVault {
         }
 
         // Per-user deposit cap check
-        let deposit_key = DataKey::UserDeposit(user.clone());
-        let current_deposit: i128 = env.storage().instance().get(&deposit_key).unwrap_or(0);
+        let current_deposit: i128 = Self::get_user_deposit(env, user);
         let new_deposit = current_deposit.checked_add(amount).expect("overflow");
         if new_deposit > per_user_cap {
             return Err(VaultError::ExceedsUserCap);
@@ -2814,7 +3109,7 @@ impl YieldVault {
         token_client.transfer(user, &env.current_contract_address(), &amount);
 
         // ── Effects: update storage ────────────────────────────────────────────
-        env.storage().instance().set(&deposit_key, &new_deposit);
+        Self::set_user_deposit(env, user, new_deposit);
 
         // Update in-memory state (used for subsequent entries in the same batch)
         state.total_assets = state.total_assets.checked_add(amount).expect("overflow");
@@ -2825,17 +3120,18 @@ impl YieldVault {
         crate::invariants::assert_vault_state_invariants(state)?;
 
         // Update user share balance
-        let user_key = DataKey::ShareBalance(user.clone());
-        let user_shares: i128 = env.storage().instance().get(&user_key).unwrap_or(0);
-        env.storage().instance().set(
-            &user_key,
-            &user_shares.checked_add(shares_to_mint).expect("overflow"),
+        let user_shares: i128 = Self::get_share_balance(env, user);
+        Self::set_share_balance(
+            env,
+            user,
+            user_shares.checked_add(shares_to_mint).expect("overflow"),
         );
 
         // Track last deposit time for withdrawal cooldown
-        env.storage().instance().set(
-            &DataKey::LastDepositTime(user.clone()),
-            &env.ledger().timestamp(),
+        Self::set_last_deposit_time(
+            env,
+            user,
+            env.ledger().timestamp(),
         );
 
         env.events()
@@ -2849,6 +3145,10 @@ impl YieldVault {
     /// For withdrawals above `LARGE_WITHDRAWAL_THRESHOLD`, a pending withdrawal
     /// is created with a 24-hour timelock. Call `execute_withdrawal` after the
     /// timelock expires to complete the transfer.
+    ///
+    /// A user with a pending large withdrawal cannot queue another one: the
+    /// request is rejected until the pending withdrawal is executed or
+    /// cancelled with [`Self::cancel_withdrawal`] (#1680).
     ///
     /// ### Parameters
     /// * `user` - The share holder (requires auth).
@@ -2877,19 +3177,14 @@ impl YieldVault {
             .get(&DataKey::WithdrawalCooldown)
             .unwrap_or(0);
         if cooldown > 0 {
-            let last_deposit: u64 = env
-                .storage()
-                .instance()
-                .get(&DataKey::LastDepositTime(user.clone()))
-                .unwrap_or(0);
+            let last_deposit: u64 = Self::get_last_deposit_time(&env, &user);
             let earliest_withdrawal = last_deposit.checked_add(cooldown).expect("overflow");
             if env.ledger().timestamp() < earliest_withdrawal {
                 return Err(VaultError::WithdrawalCooldownActive);
             }
         }
 
-        let user_key = DataKey::ShareBalance(user.clone());
-        let user_shares: i128 = env.storage().instance().get(&user_key).unwrap_or(0);
+        let user_shares: i128 = Self::get_share_balance(&env, &user);
         if user_shares < shares {
             return Err(VaultError::InsufficientShares);
         }
@@ -2907,6 +3202,14 @@ impl YieldVault {
                 .map_err(|_| VaultError::MathOverflow)?;
 
         if assets_to_return > threshold {
+            // A user may not queue a second large withdrawal while one is
+            // already pending (#1680): the pending request must be executed
+            // or cancelled first, so we never silently overwrite it and
+            // restart its 24-hour timelock.
+            if env.storage().instance().has(&DataKey::PendingWithdrawal(user.clone())) {
+                return Err(VaultError::WithdrawalCooldownActive);
+            }
+
             // Create a pending withdrawal with a 24-hour timelock
             let unlock_ts = env
                 .ledger()
@@ -2917,9 +3220,8 @@ impl YieldVault {
                 shares,
                 unlock_timestamp: unlock_ts,
             };
-            env.storage()
-                .instance()
-                .set(&DataKey::PendingWithdrawal(user.clone()), &pending);
+            Self::set_pending_withdrawal(&env, &user, &pending);
+            Self::bump_instance_ttl(&env);
             env.events()
                 .publish((symbol_short!("pndwdraw"), user), (shares, unlock_ts));
             return Ok(0);
@@ -2935,10 +3237,7 @@ impl YieldVault {
     pub fn execute_withdrawal(env: Env, user: Address) -> Result<i128, VaultError> {
         user.require_auth();
 
-        let pending: PendingWithdrawal = env
-            .storage()
-            .instance()
-            .get(&DataKey::PendingWithdrawal(user.clone()))
+        let pending: PendingWithdrawal = Self::get_pending_withdrawal(&env, &user)
             .ok_or(VaultError::NoPendingWithdrawal)?;
 
         if env.ledger().timestamp() < pending.unlock_timestamp {
@@ -2954,9 +3253,7 @@ impl YieldVault {
             return Err(VaultError::InvalidAmount);
         }
 
-        env.storage()
-            .instance()
-            .remove(&DataKey::PendingWithdrawal(user.clone()));
+        Self::remove_pending_withdrawal(&env, &user);
 
         let mut state = Self::get_state(&env);
 
@@ -2969,6 +3266,39 @@ impl YieldVault {
         .map_err(|_| VaultError::MathOverflow)?;
 
         Self::do_withdraw(&env, &mut state, user, pending.shares, assets_to_return)
+    }
+
+    /// Returns the pending large withdrawal for `user`, if one exists.
+    pub fn pending_withdrawal(env: Env, user: Address) -> Option<PendingWithdrawal> {
+        env.storage().instance().get(&DataKey::PendingWithdrawal(user))
+    }
+
+    /// Cancel a pending large withdrawal before its timelock expires.
+    ///
+    /// The caller must own the pending withdrawal (`user.require_auth()`).
+    /// Cancelling removes the pending entry so the user can submit a new
+    /// withdrawal instead of waiting out the 24-hour timelock (#1681).
+    ///
+    /// ### Errors
+    /// * [`VaultError::NoPendingWithdrawal`] - no pending withdrawal exists
+    ///   for `user`.
+    pub fn cancel_withdrawal(env: Env, user: Address) -> Result<(), VaultError> {
+        user.require_auth();
+
+        let pending: PendingWithdrawal = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingWithdrawal(user.clone()))
+            .ok_or(VaultError::NoPendingWithdrawal)?;
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingWithdrawal(user.clone()));
+
+        env.events()
+            .publish((symbol_short!("pndwcn"), user), (pending.shares, pending.unlock_timestamp));
+
+        Ok(())
     }
 
     /// Internal: burns shares, transfers assets, updates state.
@@ -3001,9 +3331,10 @@ impl YieldVault {
 
         // Capture pre-burn share balance for proportional cost-basis reduction.
         let vault_balance = Self::balance(env.clone(), user.clone());
-        env.storage().instance().set(
-            &DataKey::ShareBalance(user.clone()),
-            &vault_balance.checked_sub(shares).expect("underflow"),
+        Self::set_share_balance(
+            env,
+            &user,
+            vault_balance.checked_sub(shares).expect("underflow"),
         );
 
         state.total_assets = state
@@ -3031,8 +3362,7 @@ impl YieldVault {
         // - Full burn (shares == vault_balance): new_deposit = 0.
         // - vault_balance == 0: unreachable (InsufficientShares guard fires first), but
         //   zeroed defensively.
-        let deposit_key = DataKey::UserDeposit(user.clone());
-        let current_deposit: i128 = env.storage().instance().get(&deposit_key).unwrap_or(0);
+        let current_deposit: i128 = Self::get_user_deposit(env, &user);
         let new_deposit = if vault_balance == 0 || shares >= vault_balance {
             // Full burn or degenerate state: zero out cost basis.
             0
@@ -3047,7 +3377,8 @@ impl YieldVault {
                 .checked_sub(cost_basis_reduction)
                 .expect("underflow in cost_basis_reduction")
         };
-        env.storage().instance().set(&deposit_key, &new_deposit);
+        Self::set_user_deposit(env, &user, new_deposit);
+        Self::bump_instance_ttl(env);
 
         env.events().publish(
             (symbol_short!("withdraw"), user.clone()),
@@ -3119,15 +3450,14 @@ impl YieldVault {
             assets: assets_to_return,
             enqueued_at: env.ledger().timestamp(),
         };
-        env.storage()
-            .instance()
-            .set(&DataKey::WithdrawalQueueEntry(tail), &entry);
+        Self::set_withdrawal_queue_entry(env, tail, &entry);
         YieldVault::set_withdrawal_queue_tail(env, tail.checked_add(1).expect("queue overflow"));
 
         let vault_balance = Self::balance(env.clone(), user.clone());
-        env.storage().instance().set(
-            &DataKey::ShareBalance(user.clone()),
-            &vault_balance.checked_sub(shares).expect("underflow"),
+        Self::set_share_balance(
+            env,
+            &user,
+            vault_balance.checked_sub(shares).expect("underflow"),
         );
 
         state.total_shares = state.total_shares.checked_sub(shares).expect("underflow");
@@ -3137,8 +3467,7 @@ impl YieldVault {
             .expect("underflow");
         Self::persist_accounting_state(env, state)?;
 
-        let deposit_key = DataKey::UserDeposit(user.clone());
-        let current_deposit: i128 = env.storage().instance().get(&deposit_key).unwrap_or(0);
+        let current_deposit: i128 = Self::get_user_deposit(env, &user);
         let new_deposit = if vault_balance == 0 || shares >= vault_balance {
             0
         } else {
@@ -3151,7 +3480,8 @@ impl YieldVault {
                 .checked_sub(cost_basis_reduction)
                 .expect("underflow")
         };
-        env.storage().instance().set(&deposit_key, &new_deposit);
+        Self::set_user_deposit(env, &user, new_deposit);
+        Self::bump_instance_ttl(env);
 
         env.events().publish(
             (symbol_short!("wdqueue"), user.clone()),
@@ -3191,12 +3521,7 @@ impl YieldVault {
         let vault_addr = env.current_contract_address();
 
         while head < tail && processed < max_entries {
-            let key = DataKey::WithdrawalQueueEntry(head);
-            let Some(entry) = env
-                .storage()
-                .instance()
-                .get::<_, WithdrawalQueueEntry>(&key)
-            else {
+            let Some(entry) = Self::get_withdrawal_queue_entry(&env, head) else {
                 head = head.checked_add(1).expect("overflow");
                 continue;
             };
@@ -3207,7 +3532,7 @@ impl YieldVault {
             }
 
             token_client.transfer(&vault_addr, &entry.user, &entry.assets);
-            env.storage().instance().remove(&key);
+            Self::remove_withdrawal_queue_entry(&env, head);
             env.events().publish(
                 (symbol_short!("wdqproc"), entry.user.clone()),
                 (head, entry.assets),
@@ -3218,6 +3543,7 @@ impl YieldVault {
         }
 
         Self::set_withdrawal_queue_head(&env, head);
+        Self::bump_instance_ttl(&env);
         processed
     }
 
@@ -4251,6 +4577,11 @@ impl YieldVault {
         if threshold <= 0 {
             return Err(VaultError::InvalidDaoThreshold);
         }
+        let total_assets: i128 = env.storage().instance().get(&DataKey::TotalAssets).unwrap_or(0);
+        let max_threshold = total_assets.saturating_mul(95).saturating_div(100);
+        if threshold > max_threshold {
+            return Err(VaultError::InvalidDaoThreshold);
+        }
         env.storage()
             .instance()
             .set(&DataKey::LargeWithdrawalThreshold, &threshold);
@@ -4331,6 +4662,10 @@ impl YieldVault {
         let admin: Address = get_admin(&env).expect("Admin not set");
         admin.require_auth();
         Self::assert_admin_param_interval(&env)?;
+        const MAX_COOLDOWN: u64 = 365 * 24 * 60 * 60;
+        if seconds > MAX_COOLDOWN {
+            return Err(VaultError::InvalidDaoThreshold);
+        }
         let old: u64 = env
             .storage()
             .instance()
@@ -4856,6 +5191,45 @@ impl YieldVault {
             }
         }
 
+        if current_version < 4 && target_version >= 4 {
+            let head = Self::withdrawal_queue_head(env);
+            let tail = Self::withdrawal_queue_tail(env);
+            for seq in head..tail {
+                let key = DataKey::WithdrawalQueueEntry(seq);
+                if env.storage().instance().has(&key) {
+                    let entry: WithdrawalQueueEntry = env.storage().instance().get(&key).unwrap();
+                    env.storage().instance().remove(&key);
+                    Self::set_withdrawal_queue_entry(env, seq, &entry);
+                    Self::migrate_single_user_keys(env, &entry.user);
+                }
+            }
+
+            let nonce = env
+                .storage()
+                .instance()
+                .get::<_, u32>(&DataKey::CheckpointNonce)
+                .unwrap_or(0);
+            for cp_id in 1..=nonce {
+                let key = DataKey::CheckpointTotals(cp_id);
+                if env.storage().instance().has(&key) {
+                    let totals: CheckpointTotals = env.storage().instance().get(&key).unwrap();
+                    env.storage().instance().remove(&key);
+                    Self::set_checkpoint_totals(env, cp_id, &totals);
+                }
+            }
+
+            if let Some(users) = env
+                .storage()
+                .instance()
+                .get::<_, soroban_sdk::Vec<Address>>(&soroban_sdk::symbol_short!("mig_usr"))
+            {
+                for user in users.iter() {
+                    Self::migrate_single_user_keys(env, &user);
+                }
+                env.storage().instance().remove(&soroban_sdk::symbol_short!("mig_usr"));
+            }
+        }
+
         set_storage_version(env, target_version);
         // The previous payload used `admin.clone()`, where `admin` resolves
         // to the `admin` module rather than the migrator's address. Attribute
@@ -5048,8 +5422,6 @@ pub fn test_seed_withdrawal_queue_entry(env: Env, user: Address, shares: i128, a
         assets,
         enqueued_at: env.ledger().timestamp(),
     };
-    env.storage()
-        .instance()
-        .set(&DataKey::WithdrawalQueueEntry(tail), &entry);
+    YieldVault::set_withdrawal_queue_entry(&env, tail, &entry);
     YieldVault::set_withdrawal_queue_tail(&env, tail.checked_add(1).expect("queue overflow"));
 }

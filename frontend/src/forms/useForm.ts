@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEvent, FocusEvent, FormEvent } from "react";
 import { type ValidationSchema, validate } from "./validate";
-import { zodValidate } from "./zodValidate";
+import { FORM_ERROR_KEY, zodValidate, type FormErrors } from "./zodValidate";
 import { z } from "zod";
 
 export type FormSchema<T extends object> = ValidationSchema<T> | z.ZodSchema<T>;
@@ -10,11 +10,11 @@ export type SubmitStatus = "idle" | "loading" | "success" | "error";
 function runSchemaValidation<T extends object>(
   schema: FormSchema<T>,
   values: T
-): Partial<Record<keyof T, string>> {
+): FormErrors<T> {
   if ("safeParse" in schema && typeof schema.safeParse === "function") {
     return zodValidate(schema as z.ZodSchema<T>, values);
   }
-  return validate(schema as ValidationSchema<T>, values);
+  return validate(schema as ValidationSchema<T>, values) as FormErrors<T>;
 }
 
 /**
@@ -25,7 +25,7 @@ export function useForm<T extends object>(
   schema: FormSchema<T>
 ) {
   const [values, setValuesState] = useState<T>(initialValues);
-  const [errors, setErrors] = useState<Partial<Record<keyof T, string>>>({});
+  const [errors, setErrors] = useState<FormErrors<T>>({});
   const [touched, setTouched] = useState<Partial<Record<keyof T, boolean>>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
@@ -46,12 +46,12 @@ export function useForm<T extends object>(
 
   const filterTouchedErrors = useCallback(
     (
-      allErrors: Partial<Record<keyof T, string>>,
+      allErrors: FormErrors<T>,
       touchedMap: Partial<Record<keyof T, boolean>>
-    ): Partial<Record<keyof T, string>> =>
+    ): FormErrors<T> =>
       Object.fromEntries(
-        Object.entries(allErrors).filter(([field]) => touchedMap[field as keyof T])
-      ) as Partial<Record<keyof T, string>>,
+        Object.entries(allErrors).filter(([field]) => field === FORM_ERROR_KEY || touchedMap[field as keyof T])
+      ) as FormErrors<T>,
     []
   );
 

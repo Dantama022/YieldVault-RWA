@@ -11,6 +11,16 @@ export const SESSION_STORAGE_KEYS = [
   "yv.wallet.address",
 ] as const;
 
+/**
+ * Wallet-session keys cleared on disconnect/expiry. `wallet_session_start` is a
+ * versioned envelope (see `lib/versionedStorage`).
+ *
+ * Deliberately NOT cleared: user preference and one-time-UX keys, which are
+ * versioned envelopes that must survive a session — `yieldvault-preferences:*`,
+ * `yieldvault:user-preferences:*`, `yv_slippage_percent`, `hasSeenWalkthrough`
+ * and `yieldvault:first-deposit:*` (wallet-scoped). The legacy
+ * `yv_slippage_bps` key is migrated and removed by `useSlippage`.
+ */
 export const LOCAL_STORAGE_KEYS = [
   "wallet_session_start",
 ] as const;

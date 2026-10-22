@@ -10,6 +10,8 @@ import {
 const STORAGE_KEY = "yv_slippage_percent";
 const LEGACY_STORAGE_KEY = "yv_slippage_bps";
 
+const env = (data: number) => JSON.stringify({ version: 1, data });
+
 describe("useSlippage", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -28,7 +30,7 @@ describe("useSlippage", () => {
     });
 
     expect(result.current.slippage).toBe(1.5);
-    expect(localStorage.getItem(STORAGE_KEY)).toBe("1.5");
+    expect(localStorage.getItem(STORAGE_KEY)).toBe(env(1.5));
   });
 
   it("migrates a value stored under the legacy misnamed key", () => {
@@ -37,7 +39,7 @@ describe("useSlippage", () => {
     const { result } = renderHook(() => useSlippage());
 
     expect(result.current.slippage).toBe(0.75);
-    expect(localStorage.getItem(STORAGE_KEY)).toBe("0.75");
+    expect(localStorage.getItem(STORAGE_KEY)).toBe(env(0.75));
     expect(localStorage.getItem(LEGACY_STORAGE_KEY)).toBeNull();
   });
 
@@ -48,6 +50,20 @@ describe("useSlippage", () => {
 
     expect(result.current.slippage).toBe(SLIPPAGE_DEFAULT_PERCENT);
     expect(localStorage.getItem(LEGACY_STORAGE_KEY)).toBeNull();
+  });
+
+  it("migrates an unversioned value under the current key into an envelope", () => {
+    localStorage.setItem(STORAGE_KEY, "1.5");
+    const { result } = renderHook(() => useSlippage());
+    expect(result.current.slippage).toBe(1.5);
+    expect(localStorage.getItem(STORAGE_KEY)).toBe(env(1.5));
+  });
+
+  it("reads a versioned envelope and rejects an out-of-range envelope", () => {
+    localStorage.setItem(STORAGE_KEY, env(2));
+    expect(renderHook(() => useSlippage()).result.current.slippage).toBe(2);
+    localStorage.setItem(STORAGE_KEY, env(75));
+    expect(renderHook(() => useSlippage()).result.current.slippage).toBe(SLIPPAGE_DEFAULT_PERCENT);
   });
 
   it("falls back to the default when the stored value is out of range", () => {

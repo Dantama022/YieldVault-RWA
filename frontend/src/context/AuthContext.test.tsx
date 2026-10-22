@@ -122,7 +122,7 @@ describe("AuthContext", () => {
       actions!.renew();
     });
 
-    const newStart = parseInt(localStorage.getItem("wallet_session_start")!, 10);
+    const newStart = JSON.parse(localStorage.getItem("wallet_session_start")!).data;
     expect(newStart).toBeGreaterThanOrEqual(now);
     expect(screen.getByTestId("state").textContent).toBe("idle");
   });
